@@ -1,0 +1,20 @@
+version: '3'
+
+tasks:
+  ui:
+    cmds:
+      - open http://localhost:8500/ui/dc1/services
+
+  consul:
+    cmds:
+      - consul agent -dev -node machine
+
+  client:
+    cmds:
+      - go run github.com/bloveless/meetup-mini-microservices/cmd/client
+
+  server:
+    cmds:
+      - go run github.com/bloveless/meetup-mini-microservices/cmd/server
+
+# vim: ts=2 sts=2 sw=2 et
