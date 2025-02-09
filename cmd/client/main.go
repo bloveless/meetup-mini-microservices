@@ -2,42 +2,106 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"io"
-	"log/slog"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
-	"net/url"
+	"time"
 
-	capi "github.com/hashicorp/consul/api"
+	"github.com/hashicorp/consul/api"
 )
+
+// ConsulResolver implements a custom http.RoundTripper that resolves
+// service addresses via Consul.
+type ConsulResolver struct {
+	client    *api.Client
+	transport http.RoundTripper // Underlying transport
+}
+
+func NewConsulResolver(consulAddress string) (*ConsulResolver, error) {
+	config := api.DefaultConfig()
+	if consulAddress != "" {
+		config.Address = consulAddress
+	}
+
+	client, err := api.NewClient(config)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Consul client: %w", err)
+	}
+
+	// Use the system's default transport as a fallback.  This is important
+	// for cases where you might need to connect to services *not* registered
+	// in Consul.
+	return &ConsulResolver{
+		client:    client,
+		transport: http.DefaultTransport,
+	}, nil
+}
+
+func (r *ConsulResolver) RoundTrip(req *http.Request) (*http.Response, error) {
+	serviceName := req.URL.Hostname() // Extract service name from URL
+
+	// Query Consul for the service
+	services, _, err := r.client.Health().Service(serviceName, "", true, &api.QueryOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("error querying Consul: %w", err)
+	}
+
+	if len(services) == 0 {
+		// Fallback to regular DNS resolution if the service isn't in Consul
+		// This is CRUCIAL for handling external services or situations
+		// where Consul might be temporarily unavailable.
+		fmt.Println("Service", serviceName, "not found in Consul, falling back to default transport.")
+
+		return r.transport.RoundTrip(req)
+	}
+
+	service := services[rand.IntN(len(services))]
+
+	address := service.Service.Address
+
+	// Modify the request to point to the resolved address and port.
+	req.URL.Host = fmt.Sprintf("%s", address)
+
+	// Important:  If you're using HTTPS, you'll likely need to modify
+	// the req.URL.Scheme to "https" if it isn't already.  You might also
+	// need to handle TLS configuration.
+
+	return r.transport.RoundTrip(req)
+}
 
 func main() {
 	// Get a new client
-	// client, err := capi.NewClient(&capi.Config{Address: "127.0.0.1:8300"})
-	client, err := capi.NewClient(capi.DefaultConfig())
+	consulAddress := "localhost:8500"
+	resolver, err := NewConsulResolver(consulAddress)
 	if err != nil {
 		panic(err)
 	}
-	entries, meta, err := client.Health().Service("my-cool-service", "", true, &capi.QueryOptions{})
-	if err != nil {
-		panic(err)
-	}
-	service := entries[rand.Intn(len(entries))]
-	address, err := url.Parse("http://" + service.Service.Address + "/check")
-	if err != nil {
-		panic(err)
-	}
-	slog.Info("my-cool-service", slog.Any("service address", service.Service.Address), slog.Any("address url", address), slog.Any("meta", meta))
 
-	resp, err := http.Get(address.String())
+	client := &http.Client{
+		Transport: resolver,
+		Timeout:   10 * time.Second, // Set a timeout!
+	}
+
+	// Example usage:
+	req, err := http.NewRequestWithContext(context.Background(), "GET", "http://my-cool-service/check", nil)
+	if err != nil {
+		panic(err)
+	}
+	//
+	resp, err := client.Do(req)
 	if err != nil {
 		panic(err)
 	}
 	defer resp.Body.Close()
+
 	var b bytes.Buffer
 	_, err = io.Copy(&b, resp.Body)
 	if err != nil {
 		panic(err)
 	}
-	slog.Info("response", slog.String("content", b.String()))
+
+	fmt.Println("Status Code:", resp.StatusCode)
+	fmt.Println("Response: ", b.String())
 }

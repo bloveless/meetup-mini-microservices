@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 	capi "github.com/hashicorp/consul/api"
@@ -23,12 +24,22 @@ func main() {
 	}
 	defer l.Close()
 	address := l.Addr().String()
+	host, portRaw, err := net.SplitHostPort(l.Addr().String())
+	if err != nil {
+		panic(err)
+	}
+	port, err := strconv.ParseInt(portRaw, 10, 32)
+	if err != nil {
+		panic(err)
+	}
+	slog.Info("service", slog.String("host", host), slog.Int64("port", port))
 	serviceID := fmt.Sprintf("my-cool-service-%v", uuid.New())
 	err = client.Agent().ServiceRegister(&capi.AgentServiceRegistration{
 		Kind:    capi.ServiceKind("microservice"),
 		ID:      serviceID,
 		Name:    "my-cool-service",
 		Address: address,
+		Port:    int(port),
 		Check: &capi.AgentServiceCheck{
 			HTTP:     fmt.Sprintf("http://%s/check", address),
 			Interval: "10s",
@@ -50,7 +61,7 @@ func main() {
 		_, _ = w.Write([]byte("ok " + serviceID))
 	})
 
-	slog.Info("starting server", slog.String("serviceID", serviceID), slog.String("address", address))
+	slog.Info("starting server", slog.String("serviceID", serviceID))
 	if err := http.Serve(l, mux); err != nil {
 		panic(err)
 	}
