@@ -1,4 +1,4 @@
-version: '3'
+version: "3"
 
 tasks:
   ui:
@@ -7,7 +7,7 @@ tasks:
 
   consul:
     cmds:
-      - consul agent -dev -node machine
+      - consul agent -dev -bind 0.0.0.0 -client 0.0.0.0 -node machine
 
   client:
     cmds:
@@ -16,5 +16,4 @@ tasks:
   server:
     cmds:
       - go run github.com/bloveless/meetup-mini-microservices/cmd/server
-
 # vim: ts=2 sts=2 sw=2 et

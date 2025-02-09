@@ -12,6 +12,10 @@ import (
 	"github.com/hashicorp/consul/api"
 )
 
+const (
+	consulAddress = "192.168.0.182"
+)
+
 // ConsulResolver implements a custom http.RoundTripper that resolves
 // service addresses via Consul.
 type ConsulResolver struct {
@@ -60,9 +64,10 @@ func (r *ConsulResolver) RoundTrip(req *http.Request) (*http.Response, error) {
 	service := services[rand.IntN(len(services))]
 
 	address := service.Service.Address
+	port := service.Service.Port
 
 	// Modify the request to point to the resolved address and port.
-	req.URL.Host = fmt.Sprintf("%s", address)
+	req.URL.Host = fmt.Sprintf("%s:%d", address, port)
 
 	// Important:  If you're using HTTPS, you'll likely need to modify
 	// the req.URL.Scheme to "https" if it isn't already.  You might also
@@ -73,8 +78,7 @@ func (r *ConsulResolver) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func main() {
 	// Get a new client
-	consulAddress := "localhost:8500"
-	resolver, err := NewConsulResolver(consulAddress)
+	resolver, err := NewConsulResolver(consulAddress + ":8500")
 	if err != nil {
 		panic(err)
 	}
