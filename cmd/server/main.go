@@ -1,54 +1,41 @@
 package main
 
 import (
+	"bytes"
+	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
-	capi "github.com/hashicorp/consul/api"
+	"github.com/hashicorp/consul/api"
+
+	"github.com/bloveless/meetup-mini-microservices/internal/httpclient"
+	"github.com/bloveless/meetup-mini-microservices/internal/ip"
+	"github.com/bloveless/meetup-mini-microservices/internal/service"
 )
 
 const (
-	myIPAddress = "192.168.0.182"
+	consulAddress = "192.168.0.182:8500"
 )
 
 func main() {
-	var address string
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		panic(err)
-	}
-	for _, i := range ifaces {
-		addrs, err := i.Addrs()
-		if err != nil {
-			panic(err)
-		}
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-			if ip.To4() != nil && !strings.HasPrefix(ip.To4().String(), "127") {
-				address = ip.String()
-				slog.Info("found ip v4 address", slog.String("ip", ip.String()), slog.String("ipv4", string(ip.To4())), slog.String("ipv6", string(ip.To16())))
-			}
-		}
-	}
-
+	var algorithm string
+	flag.StringVar(&algorithm, "algorithm", "one", `algorithm "one" or "two"`)
+	flag.Parse()
+	slog.Info("starting server", slog.String("algorithm", algorithm))
 	// Get a new client
-	client, err := capi.NewClient(&capi.Config{
-		Address: fmt.Sprintf("%s:8500", myIPAddress),
+	client, err := api.NewClient(&api.Config{
+		Address: consulAddress,
 	})
 	if err != nil {
 		panic(err)
 	}
+	address := ip.Address()
 	l, err := net.Listen("tcp", fmt.Sprintf("%s:0", address))
 	if err != nil {
 		panic(err)
@@ -62,33 +49,53 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	slog.Info("service", slog.String("host", host), slog.Int64("port", port))
-	serviceID := fmt.Sprintf("my-cool-service-%v", uuid.New())
-	err = client.Agent().ServiceRegister(&capi.AgentServiceRegistration{
-		Kind:    capi.ServiceKind("microservice"),
-		ID:      serviceID,
-		Name:    "my-cool-service",
-		Address: address,
-		Port:    int(port),
-		Check: &capi.AgentServiceCheck{
-			HTTP:     fmt.Sprintf("http://%s:%d/check", host, port),
-			Interval: "10s",
-			Timeout:  "30s",
-		},
-	})
+	deregister, serviceID, err := service.Register(client, fmt.Sprintf("example-%s", algorithm), host, port)
 	if err != nil {
 		panic(err)
 	}
-	defer func() {
-		err := client.Agent().ServiceDeregister(serviceID)
-		if err != nil {
-			panic(err)
-		}
-	}()
+	defer deregister()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /check", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok " + serviceID))
+	})
+	mux.HandleFunc("POST /ring", func(w http.ResponseWriter, r *http.Request) {
+		// Receive something alter it and send it to the next
+		var b bytes.Buffer
+		_, err := io.Copy(&b, r.Body)
+		if err != nil {
+			panic(err)
+		}
+		slog.Info("received", slog.String("body", b.String()))
+		nextService := "example-two"
+		var output []string
+		if algorithm == "one" {
+			output = strings.Split(b.String(), " ")
+			slices.Reverse(output)
+		}
+
+		if algorithm == "two" {
+			nextService = "instigator"
+			inputParts := strings.Split(b.String(), " ")
+			for _, word := range inputParts {
+				runes := []rune(word)
+				slices.Reverse(runes)
+				output = append(output, string(runes))
+			}
+		}
+		slog.Info("sending", slog.String("nextService", nextService), slog.String("output", strings.Join(output, " ")))
+		cclient := httpclient.NewConsul(consulAddress)
+		resp, err := cclient.Post(fmt.Sprintf("http://%s/ring", nextService), "text/html", strings.NewReader(strings.Join(output, " ")))
+		if err != nil {
+			panic(err)
+		}
+		defer resp.Body.Close()
+		var respB bytes.Buffer
+		_, err = io.Copy(&respB, resp.Body)
+		if err != nil {
+			panic(err)
+		}
+		slog.Info("received", slog.Int("statusCode", resp.StatusCode), slog.String("body", b.String()))
 	})
 
 	slog.Info("starting server", slog.String("serviceID", serviceID))

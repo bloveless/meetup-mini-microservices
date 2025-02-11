@@ -9,11 +9,15 @@ tasks:
     cmds:
       - consul agent -dev -bind 0.0.0.0 -client 0.0.0.0 -node machine
 
-  client:
+  instigator:
     cmds:
-      - go run github.com/bloveless/meetup-mini-microservices/cmd/client
+      - go run github.com/bloveless/meetup-mini-microservices/cmd/instigator
 
-  server:
+  server-one:
     cmds:
-      - go run github.com/bloveless/meetup-mini-microservices/cmd/server
+      - go run github.com/bloveless/meetup-mini-microservices/cmd/server -algorithm one
+      
+  server-two:
+    cmds:
+      - go run github.com/bloveless/meetup-mini-microservices/cmd/server -algorithm two
 # vim: ts=2 sts=2 sw=2 et
